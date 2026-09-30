@@ -41,6 +41,8 @@ The app does not collect telemetry and does not run remote code other than the t
 
 ## Building from source
 
+📦 [**Download the source code as a ZIP**](https://github.com/Fatal-IV/download-manager-releases/archive/refs/heads/main.zip) (or clone the repository).
+
 Requirements: a recent Node.js, Rust 1.90+, and the [Tauri prerequisites for Windows](https://tauri.app/start/prerequisites/).
 
 ```bash

@@ -151,6 +151,8 @@ Sunucu `Range` isteğini destekliyorsa evet. Desteklemiyorsa uygulama bunu fark 
 <summary><b>Kaynak kod burada mı?</b></summary>
 
 Evet. Uygulamanın tam kaynak kodu bu depodadır (`src/`, `src-tauri/`, `extension/`, `scripts/`). Kod incelenmesi ve kişisel kullanım için derlenmesi amacıyla herkese açıktır; yeniden dağıtım, değiştirip yayınlama ve ticari kullanım için izin gerekir. Ayrıntılar [LICENSE](LICENSE) dosyasındadır. Uygulamanın çalışırken yaptığı her şey [README.en.md](README.en.md) içinde listelenmiştir. Güncellemeler bu depodaki Releases bölümünden otomatik denetlenir.
+
+📦 Tüm kaynağı tek dosya olarak almak için: [**Kaynak kodu ZIP olarak indir**](https://github.com/Fatal-IV/download-manager-releases/archive/refs/heads/main.zip).
 </details>
 
 ---
