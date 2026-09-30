@@ -1,0 +1,47 @@
+Download Manager (İndirme Yöneticisi) - Source-Available License
+
+Copyright (c) 2026 IK Software. All rights reserved.
+
+The source code in this repository is published so that it can be reviewed and
+verified. It is NOT open-source software. Except for the permissions listed
+below, no rights are granted.
+
+1. Permitted
+   a. Viewing, reading and auditing the source code, including for security
+      review and education.
+   b. Building the software from this source code on your own computer and
+      running it for your own personal, non-commercial use.
+   c. Installing and using the official installers published at
+      https://github.com/Fatal-IV/download-manager-releases for your own
+      personal, non-commercial use.
+   d. Forking this repository on GitHub solely as GitHub's Terms of Service
+      allow, and submitting suggestions or contributions back to it.
+
+2. Not permitted without prior written permission from the copyright holder
+   a. Copying, redistributing or publishing the source code or any binary
+      built from it, in whole or in part, other than as stated in 1.d.
+   b. Modifying the software and distributing the modified version.
+   c. Selling, sublicensing, renting or otherwise using the software or its
+      source code commercially.
+   d. Removing or altering this notice, or presenting the software or a
+      derivative as your own work or under another name.
+
+3. Contributions
+   Anything you submit to this repository may be used, modified and
+   distributed by the copyright holder as part of the software.
+
+4. Third-party components
+   The software uses third-party open-source libraries (see Cargo.toml and
+   package.json), each under its own license. This license does not change
+   their terms. The software can download yt-dlp and ffmpeg, which are not
+   part of this repository and are governed by their own licenses.
+
+5. No warranty
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
+
+For permission requests, contact the copyright holder through the GitHub
+account that publishes this repository.
