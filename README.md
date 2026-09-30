@@ -1,72 +1,160 @@
-# Download Manager (İndirme Yöneticisi)
+<div align="center">
 
-A free, modern download manager for Windows, in the spirit of IDM. It splits files into segments and downloads them over several connections, supports pause/resume, and integrates with the browser through a small extension.
+<sub>🇹🇷 Türkçe · <a href="README.en.md">🇬🇧 English</a></sub>
 
-Built with [Tauri 2](https://tauri.app) (Rust backend) and React + TypeScript + Tailwind (UI). The interface is currently in Turkish.
+<img src="assets/banner.svg" alt="İndirme Yöneticisi" width="100%"/>
 
-Installers are published at [Fatal-IV/download-manager-releases](https://github.com/Fatal-IV/download-manager-releases/releases). This repository contains the complete source code of those builds.
+<br/>
 
-## Features
+[![Son sürüm](https://img.shields.io/github/v/release/Fatal-IV/download-manager-releases?style=for-the-badge&color=5865f2&label=Son%20s%C3%BCr%C3%BCm)](https://github.com/Fatal-IV/download-manager-releases/releases/latest)
+[![İndirme sayısı](https://img.shields.io/github/downloads/Fatal-IV/download-manager-releases/total?style=for-the-badge&color=3ecf8e&label=%C4%B0ndirme)](https://github.com/Fatal-IV/download-manager-releases/releases)
+[![Platform](https://img.shields.io/badge/Windows-10%20%7C%2011-2b2d31?style=for-the-badge&logo=windows&logoColor=white)](#-kurulum)
 
-- Segmented multi-connection downloads, pause/resume, and a download queue with a concurrency limit
-- Mirror addresses and CDN IP spreading; adaptive back-off when a server rate-limits connections (HTTP 429)
-- Speed limiter, schedule window (auto pause/resume), and pause/resume on network loss and recovery
-- Sorting into category folders, search/sort, and a live speed graph
-- Optional SHA-256 verification and an optional Windows Defender scan of finished files
-- Authenticated downloads (HTTP basic auth, cookie header)
-- Video/audio downloads through [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-- System tray, start with Windows, desktop notifications
-- Connection speed test
-- Browser extension (Chromium, Manifest V3) that hands browser downloads over to the app
-- Automatic, signed updates
+### [⬇️&nbsp;&nbsp;Windows için indir](https://github.com/Fatal-IV/download-manager-releases/releases/latest/download/IndirmeYoneticisi_x64-setup.exe)
 
-## What the app does when it runs
+<sub>Tek tıkla en son sürümün kurulum dosyası iner · Türkçe kurulum · ~5 MB</sub>
 
-This section lists everything the app does outside its own window, so it can be reviewed.
+<br/>
 
-| Behavior | Details |
-|---|---|
-| Downloads | Only files that the user adds, or that the browser extension hands over. Files go to the configured download folder. |
-| Local server | Listens on `127.0.0.1:38653` (loopback only) so the browser extension can send downloads. Requests carrying an `Origin` header that is not `chrome-extension://` or `moz-extension://` are rejected, and web pages cannot reach it. |
-| Data storage | A SQLite database (`downloads.db`) and logs in the app data folder. Nothing is sent to any server other than the download hosts the user chose. |
-| Auto-update | Checks `github.com/Fatal-IV/download-manager-releases/releases/latest/download/latest.json` at startup and periodically. Update packages are verified against the public key in `src-tauri/tauri.conf.json` before they are installed. |
-| Start with Windows | Off unless the user enables it in Settings. |
-| Video downloads | On first use of the video feature the app downloads `yt-dlp.exe` (from the official yt-dlp GitHub releases) and `ffmpeg` (from gyan.dev) into its own `tools` folder and runs them. The feature is not used otherwise. |
-| Defender scan | Optional. Runs the local `MpCmdRun.exe` of Windows Defender on a finished download. |
-| Notifications | Shows a Windows notification when a download finishes. |
+<a href="https://github.com/Fatal-IV/download-manager-releases/releases/latest/download/IndirmeYoneticisi_x64-setup.exe"><b>Kurulum (.exe)</b></a>
+&nbsp;·&nbsp;
+<a href="https://github.com/Fatal-IV/download-manager-releases/releases/latest"><b>Sürüm notları</b></a>
+&nbsp;·&nbsp;
+<a href="https://github.com/Fatal-IV/download-manager-releases/releases"><b>Tüm sürümler</b></a>
 
-The app does not collect telemetry and does not run remote code other than the tools above and its signed updates.
+</div>
 
-## Building from source
+---
 
-Requirements: a recent Node.js, Rust 1.90+, and the [Tauri prerequisites for Windows](https://tauri.app/start/prerequisites/).
+## ✨ Nedir?
 
-```bash
-npm install
-npm run tauri dev      # development
-npm run build          # build the UI
-npm run lint
-cd src-tauri && cargo test --lib
-npm run tauri build    # NSIS installer (needs a signing key, see below)
-```
+**İndirme Yöneticisi**, büyük dosyaları tek bir bağlantıya mahkûm kalmadan indirmeni sağlayan hafif bir Windows uygulamasıdır.
+Dosyayı parçalara böler, parçaları aynı anda ayrı bağlantılarla indirir ve sonunda birleştirir. Cam efektli arayüzü; hız sınırı, zamanlayıcı ve otomatik güncelleme gibi günlük hayatı kolaylaştıran özelliklerle birlikte gelir.
 
-Release builds are signed with a Tauri updater key (`TAURI_SIGNING_PRIVATE_KEY`). The matching public key is in `src-tauri/tauri.conf.json`. The private key is not part of this repository; to build your own installer, generate a key with `npm run tauri signer generate` and replace the public key. `scripts/release.mjs` is the script used to publish releases.
+<div align="center">
+<img src="assets/demo.svg" alt="Parçalı indirme ve canlı hız grafiği (temsili animasyon)" width="90%"/>
+<br/>
+<sub>Temsili animasyon: dosya parçalara bölünür, her parça kendi bağlantısıyla iner.</sub>
+</div>
 
-Installers are not code-signed with a Windows certificate, so Windows SmartScreen may show a warning and some antivirus products may flag them heuristically. You can verify a build by compiling the source yourself.
+---
 
-## Browser extension
+## 🚀 Özellikler
 
-The `extension/` folder is an unpacked Manifest V3 extension. In Chrome or Edge open `chrome://extensions`, enable developer mode, choose "Load unpacked" and select the folder. It only works while the app is running; otherwise the browser downloads the file itself. Downloads that start from `blob:` or `data:` addresses stay in the browser because the app cannot fetch them.
+<table>
+<tr>
+<td width="50%" valign="top">
 
-## Project layout
+### ⚡ Hız
+- **Parçalı indirme:** Dosya 1–32 parçaya bölünüp aynı anda iner
+- **CDN'e dağıtma:** Bağlantılar sunucunun birden çok adresine paylaştırılır
+- **Yansı (mirror) adresleri:** Aynı dosyayı birden çok kaynaktan çek
+- **Hız testi:** Kaç bağlantının gerçekten işe yaradığını ölç
+- **Akıllı geri çekilme:** Sunucu 429 verirse bağlantı sayısı kendiliğinden düşer
 
-```
-src/            React UI
-src-tauri/      Rust backend (download engine, manager, local server, tray, updater)
-extension/      Browser extension
-scripts/        Release script
-```
+</td>
+<td width="50%" valign="top">
 
-## License
+### 🎛️ Denetim
+- **Hız sınırı:** İnternetin başka işlere de kalsın
+- **Zamanlayıcı:** İndirmeler yalnızca seçtiğin saat aralığında çalışsın (ör. gece 02:00–08:00)
+- **Aynı anda indirme sınırı** ve otomatik **kuyruk**
+- **Duraklat / sürdür**, kapatıp açsan da kaldığı yerden devam
+- **Canlı hız grafiği** her indirmede
 
-Source-available, all rights reserved. The code is public so it can be reviewed and built for personal use, but it may not be redistributed, modified for distribution or used commercially without permission. See [LICENSE](LICENSE).
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🗂️ Düzen
+- **Türüne göre otomatik klasör:** Video, Müzik, Görseller, Belgeler, Arşivler, Programlar
+- **Arama, süzme ve sıralama:** ad, boyut, ilerleme, hız
+- **Bitince bildirim:** Windows bildirimi ile haber alırsın
+- **Açık ve koyu tema**
+
+</td>
+<td width="50%" valign="top">
+
+### 🔄 Güvenilirlik
+- **Ağ koparsa duraklar, gelince kendiliğinden devam eder**
+- **Windows ile başlatma** ve **sistem tepsisinde çalışma**
+- **Otomatik güncelleme:** yeni sürüm arka planda iner, sen "Yenile" dersin
+- **Yenilikler penceresi:** güncelleme sonrası neyin değiştiğini görürsün
+- Güncellemeler **imzalıdır**; doğrulanmayan paket kurulmaz
+
+</td>
+</tr>
+</table>
+
+---
+
+## 📥 Kurulum
+
+<table>
+<tr>
+<td align="center" width="33%">
+
+**1 · İndir**
+
+[**Kurulum dosyasını indir**](https://github.com/Fatal-IV/download-manager-releases/releases/latest/download/IndirmeYoneticisi_x64-setup.exe)
+
+</td>
+<td align="center" width="33%">
+
+**2 · Kur**
+
+`IndirmeYoneticisi_x64-setup.exe` dosyasını çalıştır. Kurulum Türkçedir ve yönetici izni gerektirmez.
+
+</td>
+<td align="center" width="33%">
+
+**3 · Kullan**
+
+Bağlantıyı yapıştır, **+** düğmesine bas. Gerisini uygulama halleder.
+
+</td>
+</tr>
+</table>
+
+> [!NOTE]
+> Kurulum dosyası henüz bir kod imzalama sertifikasıyla imzalanmadığından Windows **SmartScreen** "Bilinmeyen yayıncı" uyarısı gösterebilir.
+> Bu durumda **Ek bilgi → Yine de çalıştır** seçeneğini kullanabilirsin.
+
+**Sistem gereksinimleri:** Windows 10 veya 11 (64 bit) · WebView2 (Windows 11'de hazır gelir).
+
+**Güncelleme:** Uygulamayı bir kez kurman yeter. Sonraki sürümler otomatik gelir; istersen **Ayarlar → Güncellemeler → Güncellemeleri denetle** ile elle de bakabilirsin.
+
+---
+
+## ❓ Sık sorulanlar
+
+<details>
+<summary><b>Parça sayısını artırmak her zaman hızlandırır mı?</b></summary>
+
+Hayır. Bazı sunucular tek bağlantıya hız sınırı koyar, bazıları ise bağlantı sayısına. Ayarlar'daki **hız testi**, senin bağlantın ve o sunucu için hangi sayının en iyi olduğunu ölçer.
+</details>
+
+<details>
+<summary><b>Pencereyi kapatınca indirmeler durur mu?</b></summary>
+
+Hayır. Pencereyi kapatmak uygulamayı sistem tepsisine indirir, indirmeler sürer. Tamamen çıkmak için tepsi simgesine sağ tıklayıp **Çık**'ı seç. Çıkarken yarım kalanlar bir sonraki açılışta kendiliğinden devam eder.
+</details>
+
+<details>
+<summary><b>Kaldığı yerden devam etme her sitede çalışır mı?</b></summary>
+
+Sunucu `Range` isteğini destekliyorsa evet. Desteklemiyorsa uygulama bunu fark eder ve o dosyayı tek bağlantıyla baştan indirir.
+</details>
+
+<details>
+<summary><b>Kaynak kod burada mı?</b></summary>
+
+Evet. Uygulamanın tam kaynak kodu bu depodadır (`src/`, `src-tauri/`, `extension/`, `scripts/`). Kod incelenmesi ve kişisel kullanım için derlenmesi amacıyla herkese açıktır; yeniden dağıtım, değiştirip yayınlama ve ticari kullanım için izin gerekir. Ayrıntılar [LICENSE](LICENSE) dosyasındadır. Uygulamanın çalışırken yaptığı her şey [README.en.md](README.en.md) içinde listelenmiştir. Güncellemeler bu depodaki Releases bölümünden otomatik denetlenir.
+</details>
+
+---
+
+<div align="center">
+<sub>Yapımcı: <a href="https://github.com/Fatal-IV">Fatal-IV</a> · Tauri, Rust ve React ile geliştirildi</sub>
+</div>
