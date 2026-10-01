@@ -176,6 +176,8 @@ pub fn run() {
       commands::remove_download,
       commands::open_download,
       commands::reveal_download,
+      commands::extension_path,
+      commands::open_extension_folder,
       commands::hash_download,
       commands::video_prepare,
       commands::add_video,

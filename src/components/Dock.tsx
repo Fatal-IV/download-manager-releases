@@ -24,17 +24,7 @@ interface Item {
   count?: number
 }
 
-export function Dock({
-  counts,
-  onAdd,
-  onSettings,
-  speed,
-}: {
-  counts: Record<Filter, number>
-  onAdd: () => void
-  onSettings: () => void
-  speed: number
-}) {
+export function Dock({ counts, onAdd, speed }: { counts: Record<Filter, number>; onAdd: () => void; speed: number }) {
   const filter = useStore((s) => s.filter)
   const setFilter = useStore((s) => s.setFilter)
   const theme = useStore((s) => s.theme)
@@ -42,22 +32,22 @@ export function Dock({
   const unread = useStore((s) => s.notifications.filter((n) => !n.read).length)
   const panelOpen = useStore((s) => s.panelOpen)
   const setPanelOpen = useStore((s) => s.setPanelOpen)
+  const settingsOpen = useStore((s) => s.settingsOpen)
+  const toggleSettings = useStore((s) => s.toggleSettings)
 
-  const items: Item[] = [
-    ...FILTERS.map<Item>((f) => ({
-      key: f.id,
-      label: f.label,
-      icon: f.icon,
-      count: counts[f.id],
-      active: filter === f.id,
-      onClick: () => setFilter(f.id),
-    })),
-  ]
+  const items: Item[] = FILTERS.map<Item>((f) => ({
+    key: f.id,
+    label: f.label,
+    icon: f.icon,
+    count: counts[f.id],
+    active: filter === f.id,
+    onClick: () => setFilter(f.id),
+  }))
 
   const group = useRef<HTMLDivElement>(null)
   const cells = useRef<(HTMLDivElement | null)[]>([])
-  const [scales, setScales] = useState<number[]>(() => items.map(() => 1))
-  const [widths, setWidths] = useState<number[]>(() => items.map(() => BASE))
+  const [scales, setScales] = useState<number[]>([])
+  const [widths, setWidths] = useState<number[]>([])
 
   // Düzen sabit kalır (ölçüm offsetLeft/offsetWidth ile, dönüşümlerden etkilenmez);
   // büyüme yalnızca transform ile yapılır, komşular kayarak yer açar.
@@ -80,16 +70,17 @@ export function Dock({
     setScales(items.map(() => 1))
   }
 
-  const extra = scales.map((s, i) => widths[i] * (s - 1))
+  const scaleOf = (i: number) => scales[i] ?? 1
+  const extra = items.map((_, i) => (widths[i] ?? BASE) * (scaleOf(i) - 1))
   const totalExtra = extra.reduce((a, b) => a + b, 0)
-  const resting = scales.every((s) => s === 1)
+  const resting = items.every((_, i) => scaleOf(i) === 1)
 
   return (
     <div className="pointer-events-none absolute inset-x-0 top-3 z-20 px-4">
       <nav
         onMouseMove={onMove}
         onMouseLeave={onLeave}
-        className="pointer-events-auto relative grid h-[66px] w-full grid-cols-[1fr_auto_1fr] items-center rounded-[26px] border border-white/25 bg-white/[0.07] px-5 shadow-[0_12px_40px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.35),inset_0_-1px_0_rgba(255,255,255,0.08)] backdrop-blur-3xl backdrop-brightness-110 backdrop-saturate-200"
+        className="orbit-hover pointer-events-auto relative grid h-[66px] w-full grid-cols-[1fr_auto_1fr] items-center rounded-[26px] border border-white/25 bg-white/[0.07] px-5 shadow-[0_12px_40px_rgba(0,0,0,0.35),inset_0_1px_0_rgba(255,255,255,0.35),inset_0_-1px_0_rgba(255,255,255,0.08)] backdrop-blur-3xl backdrop-brightness-110 backdrop-saturate-200"
       >
         <div className="flex items-center gap-2.5">
           <div className="grid h-9 w-9 place-items-center rounded-xl bg-accent text-white shadow-md">
@@ -118,13 +109,13 @@ export function Dock({
                     onClick={it.onClick}
                     aria-pressed={it.active}
                     className={clsx(
-                      'relative flex h-full items-center gap-2 whitespace-nowrap rounded-[14px] px-3.5 text-sm font-medium shadow-md will-change-transform',
+                      'orbit-hover relative flex h-full items-center gap-2 whitespace-nowrap rounded-[14px] px-3.5 text-sm font-medium shadow-md will-change-transform',
                       it.active
-                        ? 'bg-accent text-white'
+                        ? 'orbit-light bg-accent text-white'
                         : 'bg-white/10 text-ink hover:bg-white/15',
                     )}
                     style={{
-                      transform: `translateX(${shift}px) scale(${scales[i]})`,
+                      transform: `translateX(${shift}px) scale(${scaleOf(i)})`,
                       transition: resting ? 'transform 200ms cubic-bezier(.2,.8,.2,1)' : 'none',
                     }}
                   >
@@ -154,7 +145,7 @@ export function Dock({
             onClick={onAdd}
             title="Yeni indirme"
             aria-label="Yeni indirme"
-            className="grid h-11 w-11 place-items-center rounded-[14px] bg-accent text-white shadow-md transition-transform hover:scale-105 active:scale-95"
+            className="orbit-hover orbit-light relative grid h-11 w-11 place-items-center rounded-[14px] bg-accent text-white shadow-md transition-transform hover:scale-105 active:scale-95"
           >
             <Plus size={20} />
           </button>
@@ -165,8 +156,8 @@ export function Dock({
             aria-expanded={panelOpen}
             data-notification-bell
             className={clsx(
-              'relative grid h-11 w-11 place-items-center rounded-[14px] text-ink shadow-md transition-transform hover:scale-105 active:scale-95',
-              panelOpen ? 'bg-accent text-white' : 'bg-white/10 hover:bg-white/15',
+              'orbit-hover relative grid h-11 w-11 place-items-center rounded-[14px] text-ink shadow-md transition-transform hover:scale-105 active:scale-95',
+              panelOpen ? 'orbit-light bg-accent text-white' : 'bg-white/10 hover:bg-white/15',
             )}
           >
             <Bell size={18} />
@@ -177,10 +168,14 @@ export function Dock({
             )}
           </button>
           <button
-            onClick={onSettings}
+            onClick={toggleSettings}
             title="Ayarlar"
             aria-label="Ayarlar"
-            className="grid h-11 w-11 place-items-center rounded-[14px] bg-white/10 text-ink shadow-md transition-transform hover:scale-105 hover:bg-white/15 active:scale-95"
+            aria-pressed={settingsOpen}
+            className={clsx(
+              'orbit-hover relative grid h-11 w-11 place-items-center rounded-[14px] shadow-md transition-transform hover:scale-105 active:scale-95',
+              settingsOpen ? 'orbit-light bg-accent text-white' : 'bg-white/10 text-ink hover:bg-white/15',
+            )}
           >
             <Settings size={18} />
           </button>
@@ -188,7 +183,7 @@ export function Dock({
             onClick={toggleTheme}
             title={theme === 'dark' ? 'Açık tema' : 'Koyu tema'}
             aria-label={theme === 'dark' ? 'Açık temaya geç' : 'Koyu temaya geç'}
-            className="grid h-11 w-11 place-items-center rounded-[14px] bg-white/10 text-ink shadow-md transition-transform hover:scale-105 hover:bg-white/15 active:scale-95"
+            className="orbit-hover relative grid h-11 w-11 place-items-center rounded-[14px] bg-white/10 text-ink shadow-md transition-transform hover:scale-105 hover:bg-white/15 active:scale-95"
           >
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
           </button>

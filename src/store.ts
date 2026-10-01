@@ -1,8 +1,37 @@
 import { create } from 'zustand'
 import { api } from './lib/api'
-import type { AddExtras, AppNotification, Download, Filter, Settings, SortKey } from './types'
+import type { AddExtras, AppNotification, Download, Filter, Settings, SettingsTab, SortKey } from './types'
 
 type Theme = 'dark' | 'light'
+
+const LAST_DONE_KEY = 'dm.lastCompletedId'
+
+function readLastDone(): string | null {
+  try {
+    return localStorage.getItem(LAST_DONE_KEY)
+  } catch {
+    return null
+  }
+}
+
+function writeLastDone(id: string | null) {
+  try {
+    if (id) localStorage.setItem(LAST_DONE_KEY, id)
+    else localStorage.removeItem(LAST_DONE_KEY)
+  } catch {
+    /* depolama kapalıysa yalnızca oturum boyunca tutulur */
+  }
+}
+
+/** Kayıtlı kimlik hâlâ tamamlanmış bir indirmeyse o; değilse en son eklenen tamamlanmış indirme. */
+function resolveLastDone(downloads: Record<string, Download>, saved: string | null): string | null {
+  if (saved && downloads[saved]?.status === 'completed') return saved
+  let best: Download | null = null
+  for (const d of Object.values(downloads)) {
+    if (d.status === 'completed' && (!best || d.addedAt > best.addedAt)) best = d
+  }
+  return best?.id ?? null
+}
 
 interface State {
   downloads: Record<string, Download>
@@ -21,8 +50,16 @@ interface State {
   /** Ekranda görünen toast bildirimleri (en çok 3). */
   toasts: AppNotification[]
   panelOpen: boolean
+  /** Ayarlar sayfası açık mı; açıkken Dock'ta kategoriler görünür. */
+  settingsOpen: boolean
+  settingsTab: SettingsTab
+  toggleSettings: () => void
+  closeSettings: () => void
+  setSettingsTab: (tab: SettingsTab) => void
   /** Bildirimden gidilen indirme; satır bunu görünce vurgulanır. */
   focusId: string | null
+  /** En son tamamlanan indirme; satırı hareketli çerçeveyle vurgulanır. */
+  lastCompletedId: string | null
   setPanelOpen: (open: boolean) => void
   markRead: (id: number) => void
   markAllRead: () => void
@@ -67,7 +104,10 @@ export const useStore = create<State>((set, get) => ({
   notifications: [],
   toasts: [],
   panelOpen: false,
+  settingsOpen: false,
+  settingsTab: 'general',
   focusId: null,
+  lastCompletedId: null,
   category: '',
   setCategory: (category) => set({ category }),
 
@@ -81,6 +121,9 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setPanelOpen: (panelOpen) => set({ panelOpen }),
+  toggleSettings: () => set((s) => ({ settingsOpen: !s.settingsOpen, panelOpen: false })),
+  closeSettings: () => set({ settingsOpen: false }),
+  setSettingsTab: (settingsTab) => set({ settingsTab }),
   markRead(id) {
     set((s) => ({
       notifications: s.notifications.map((n) => (n.id === id ? { ...n, read: true } : n)),
@@ -131,12 +174,20 @@ export const useStore = create<State>((set, get) => ({
       .then((settings) => set({ settings }))
       .catch(() => {})
     api.list().then((list) =>
-      set({ downloads: Object.fromEntries(list.map((d) => [d.id, d])) }),
+      set(() => {
+        const downloads = Object.fromEntries(list.map((d) => [d.id, d]))
+        return { downloads, lastCompletedId: resolveLastDone(downloads, readLastDone()) }
+      }),
     )
     const offDownloads = api.subscribe(
       (d) =>
         set((s) => {
           const next: Partial<State> = { downloads: { ...s.downloads, [d.id]: d } }
+          const before = s.downloads[d.id]
+          if (d.status === 'completed' && before && before.status !== 'completed') {
+            next.lastCompletedId = d.id
+            writeLastDone(d.id)
+          }
           const now = Date.now()
           if (d.status === 'downloading' && now - (lastSample[d.id] ?? 0) >= SAMPLE_MS) {
             lastSample[d.id] = now
@@ -152,7 +203,9 @@ export const useStore = create<State>((set, get) => ({
           const { [id]: _removed, ...rest } = s.downloads
           const { [id]: _h, ...history } = s.speedHistory
           delete lastSample[id]
-          return { downloads: rest, speedHistory: history }
+          const lastCompletedId = resolveLastDone(rest, s.lastCompletedId === id ? null : s.lastCompletedId)
+          writeLastDone(lastCompletedId)
+          return { downloads: rest, speedHistory: history, lastCompletedId }
         }),
     )
     return () => {

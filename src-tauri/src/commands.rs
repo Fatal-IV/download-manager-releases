@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager as _, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::manager::{AddRequest, DownloadDto, Manager, Settings};
@@ -163,6 +163,37 @@ pub fn reveal_download(m: State<'_, Manager>, id: String) -> Result<(), String> 
     let p = m.file_path(&id).ok_or("Dosya bulunamadı")?;
     std::process::Command::new("explorer")
         .arg(format!("/select,{}", p.display()))
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Kurulumla gelen tarayıcı eklentisi klasörü. Geliştirmede proje kökündeki `extension/` kullanılır.
+fn extension_dir(app: &AppHandle) -> Option<std::path::PathBuf> {
+    let installed = app.path().resource_dir().ok().map(|d| d.join("extension"));
+    let dir = installed
+        .filter(|p| p.join("manifest.json").exists())
+        .or_else(|| {
+            let dev = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../extension");
+            dev.join("manifest.json").exists().then_some(dev)
+        })?;
+    // Gezgin ve Chrome "\?\" önekli yolları sevmez.
+    let text = dir.to_string_lossy().trim_start_matches(r"\?\").to_string();
+    Some(std::path::PathBuf::from(text))
+}
+
+/// Eklenti klasörünün yolunu döndürür (arayüzde göstermek için); bulunamazsa null.
+#[tauri::command]
+pub fn extension_path(app: AppHandle) -> Option<String> {
+    extension_dir(&app).map(|p| p.display().to_string())
+}
+
+/// Eklenti klasörünü Gezgin'de açar; kullanıcı Chrome'da "Paketlenmemiş öğe yükle" ile buradan yükler.
+#[tauri::command]
+pub fn open_extension_folder(app: AppHandle) -> Result<(), String> {
+    let dir = extension_dir(&app).ok_or("Eklenti klasörü bulunamadı")?;
+    std::process::Command::new("explorer")
+        .arg(dir)
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())

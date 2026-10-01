@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.6"
+version = "0.1.10"
 description = "A free, modern multi-connection download manager with browser integration"
 authors = ["IK Software"]
 license-file = "../LICENSE"

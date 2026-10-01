@@ -51,7 +51,7 @@ export default function App() {
   const [adding, setAdding] = useState(false)
   const category = useStore((s) => s.category)
   const setCategory = useStore((s) => s.setCategory)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsOpen = useStore((s) => s.settingsOpen)
 
   useEffect(() => init(), [init])
 
@@ -101,7 +101,7 @@ export default function App() {
 
   return (
     <div className="relative h-full">
-      <Dock counts={counts} onAdd={() => setAdding(true)} onSettings={() => setSettingsOpen(true)} speed={totalSpeed} />
+      <Dock counts={counts} onAdd={() => setAdding(true)} speed={totalSpeed} />
 
       {/* İçerik dock'un arkasından kayar; cam efekti bu sayede görünür. */}
       <main className="h-full overflow-y-auto px-6 pb-8 pt-28">
@@ -179,7 +179,7 @@ export default function App() {
       <UpdateBanner />
       {whatsNew && <WhatsNewDialog info={whatsNew} onClose={() => setWhatsNew(null)} />}
       {adding && <AddDialog onClose={() => setAdding(false)} />}
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsDialog />}
     </div>
   )
 }

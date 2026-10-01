@@ -7,6 +7,22 @@ import { filenameFromUrl } from './format'
  */
 export function createMockApi(): Api {
   const items = new Map<string, Download>()
+
+  // Yalnızca `?demo` ile açılırsa: tasarım önizlemesi için örnek indirmeler (en yenisi son tamamlanan olur).
+  if (typeof location !== 'undefined' && location.search.includes('demo')) {
+    const now = Date.now()
+    const sample = (id: string, filename: string, mb: number, age: number, status: Download['status'], pct = 1): Download => ({
+      id, url: `https://example.com/${filename}`, filename, totalBytes: mb * 1048576,
+      downloadedBytes: Math.round(mb * 1048576 * pct), speed: 0, status, connections: 8, addedAt: now - age,
+      segments: [], category: 'Programlar',
+    })
+    for (const d of [
+      sample('demo-1', 'ubuntu-24.04-desktop.iso', 5800, 3_600_000, 'completed'),
+      sample('demo-2', 'IndirmeYoneticisi_x64-setup.exe', 5, 600_000, 'completed'),
+      sample('demo-3', 'Rapor-Ekim.pdf', 12, 60_000, 'completed'),
+      sample('demo-4', 'film-1080p.mkv', 2400, 20_000, 'paused', 0.4),
+    ]) items.set(d.id, d)
+  }
   const updateSubs = new Set<(d: Download) => void>()
   const removeSubs = new Set<(id: string) => void>()
   const emit = (d: Download) => updateSubs.forEach((f) => f({ ...d }))
@@ -122,6 +138,10 @@ export function createMockApi(): Api {
     },
     async open() {},
     async reveal() {},
+    async extensionPath() {
+      return String.raw`C:\Users\kullanici\AppData\Local\İndirme Yöneticisi\extension`
+    },
+    async openExtensionFolder() {},
     async hash(id) {
       const d = items.get(id)
       if (!d || d.status !== 'completed') return

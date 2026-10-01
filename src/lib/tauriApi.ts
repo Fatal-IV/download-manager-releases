@@ -31,6 +31,8 @@ export function createTauriApi(): Api {
     remove: (id) => invoke('remove_download', { id, deleteFile: false }),
     open: (id) => invoke('open_download', { id }),
     reveal: (id) => invoke('reveal_download', { id }),
+    extensionPath: () => invoke<string | null>('extension_path'),
+    openExtensionFolder: () => invoke('open_extension_folder'),
     hash: (id) => invoke('hash_download', { id }),
     scan: (id) => invoke('scan_download', { id }),
     listNotifications: () => invoke<AppNotification[]>('list_notifications'),

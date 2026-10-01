@@ -117,6 +117,9 @@ export interface Api {
   remove(id: string): Promise<void>
   open(id: string): Promise<void>
   reveal(id: string): Promise<void>
+  /** Kurulumla gelen tarayıcı eklentisi klasörünün yolu; yoksa null. */
+  extensionPath(): Promise<string | null>
+  openExtensionFolder(): Promise<void>
   /** Tamamlanan dosyanın SHA-256 özetini hesaplar; sonuç abonelik olayıyla gelir. */
   hash(id: string): Promise<void>
   /** Tamamlanan dosyayı Windows Defender ile tarar; sonuç abonelik olayıyla gelir. */
@@ -131,6 +134,8 @@ export interface Api {
   /** Motor olaylarına abone olur; aboneliği bitiren fonksiyonu döndürür. */
   subscribe(onUpdate: (d: Download) => void, onRemove: (id: string) => void): () => void
 }
+
+export type SettingsTab = 'general' | 'transfer' | 'notifications' | 'browser' | 'about'
 
 export type NotificationKind =
   | 'download_complete'

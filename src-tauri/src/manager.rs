@@ -1291,6 +1291,18 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refused_connection_creates_failed_notification() {
+        // 1 numaralı port kapalı: sunucuya hiç bağlanılamaz.
+        let (m, dir) = temp_manager(Arc::new(|_| {}));
+        let d = m.add(req("http://localhost:1/yok.zip")).unwrap();
+        let all = wait_notifs(&m, |a| has(a, "download_failed", &d.id)).await;
+        let n = all.iter().find(|n| n.kind == "download_failed").unwrap();
+        assert_eq!(n.level, "danger");
+        assert!(n.body.starts_with("yok.zip"), "{}", n.body);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
     async fn hash_and_verification_create_notifications() {
         use crate::engine::testserver::pattern;
         let total = 256 * 1024;
