@@ -45,9 +45,35 @@ pub fn plan(total: u64, parts: u32) -> Vec<Segment> {
     out
 }
 
+/// Sürmekte olan bir parçanın kalan kısmını bölecek bayt konumu (yeni parçanın başlangıcı).
+/// `pos` bir sonraki inecek bayttır, `end` parçanın son baytı (dahil). Kalan kısım iki yarısı da
+/// `MIN_SEGMENT`'ten küçük kalacaksa bölünmez.
+pub fn split_point(pos: u64, end: u64) -> Option<u64> {
+    let remaining = (end + 1).checked_sub(pos)?;
+    (remaining >= 2 * MIN_SEGMENT).then(|| pos + remaining / 2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_point_halves_the_remaining_bytes() {
+        let (pos, end) = (1_000_000, 1_000_000 + 4 * MIN_SEGMENT - 1);
+        let mid = split_point(pos, end).unwrap();
+        assert_eq!(mid, pos + 2 * MIN_SEGMENT);
+    }
+
+    #[test]
+    fn split_point_refuses_when_halves_would_be_too_small() {
+        assert_eq!(split_point(0, 2 * MIN_SEGMENT - 2), None);
+        assert!(split_point(0, 2 * MIN_SEGMENT - 1).is_some());
+    }
+
+    #[test]
+    fn split_point_is_none_for_finished_segment() {
+        assert_eq!(split_point(500, 499), None);
+    }
 
     fn assert_covers(segs: &[Segment], total: u64) {
         assert_eq!(segs.first().unwrap().start, 0);

@@ -35,6 +35,7 @@ export function DownloadRow({ d }: { d: Download }) {
   const reveal = useStore((s) => s.reveal)
   const hash = useStore((s) => s.hash)
   const scan = useStore((s) => s.scan)
+  const focused = useStore((s) => s.focusId === d.id)
 
   const [open_, setOpenDetails] = useState(false)
   const pct = d.totalBytes ? Math.min(100, (d.downloadedBytes / d.totalBytes) * 100) : 0
@@ -42,7 +43,13 @@ export function DownloadRow({ d }: { d: Download }) {
   const canResume = d.status === 'paused' || d.status === 'failed'
 
   return (
-    <div className="group rounded-xl border border-line bg-panel p-4 transition-colors hover:border-accent/40">
+    <div
+      id={`dl-${d.id}`}
+      className={clsx(
+        'group rounded-xl border bg-panel p-4 transition-colors hover:border-accent/40',
+        focused ? 'border-accent ring-2 ring-accent/60' : 'border-line',
+      )}
+    >
       <div className="flex items-center gap-3">
         <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-raised text-mute">
           <File size={18} />

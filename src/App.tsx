@@ -3,6 +3,8 @@ import { Inbox, Search, X } from 'lucide-react'
 import { AddDialog } from './components/AddDialog'
 import { DownloadRow } from './components/DownloadRow'
 import { Dock } from './components/Dock'
+import { NotificationPanel } from './components/NotificationPanel'
+import { Toasts } from './components/Toasts'
 import { SettingsDialog } from './components/SettingsDialog'
 import { UpdateBanner } from './components/UpdateBanner'
 import { WhatsNewDialog } from './components/WhatsNewDialog'
@@ -47,10 +49,26 @@ export default function App() {
   const setSort = useStore((s) => s.setSort)
   const init = useStore((s) => s.init)
   const [adding, setAdding] = useState(false)
-  const [category, setCategory] = useState('')
+  const category = useStore((s) => s.category)
+  const setCategory = useStore((s) => s.setCategory)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => init(), [init])
+
+  // Bildirimden gidilen indirme: tür süzgecini kaldır, satırı ortala ve 2 sn vurgula.
+  const focusId = useStore((s) => s.focusId)
+  const clearFocus = useStore((s) => s.clearFocus)
+  useEffect(() => {
+    if (!focusId) return
+    const scroll = requestAnimationFrame(() =>
+      document.getElementById(`dl-${focusId}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }),
+    )
+    const done = setTimeout(clearFocus, 2000)
+    return () => {
+      cancelAnimationFrame(scroll)
+      clearTimeout(done)
+    }
+  }, [focusId, clearFocus])
   useEffect(() => startUpdateChecks(), [])
   const [whatsNew, setWhatsNew] = useState<WhatsNew | null>(null)
   useEffect(() => {
@@ -156,6 +174,8 @@ export default function App() {
         </div>
       </main>
 
+      <NotificationPanel />
+      <Toasts />
       <UpdateBanner />
       {whatsNew && <WhatsNewDialog info={whatsNew} onClose={() => setWhatsNew(null)} />}
       {adding && <AddDialog onClose={() => setAdding(false)} />}

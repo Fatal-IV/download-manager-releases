@@ -34,6 +34,9 @@ pub struct Cfg {
     pub unknown_length: bool,
     /// 0 değilse bu kadar eşzamanlı indirme bağlantısından fazlasına 429 + `Retry-After: 1` döner.
     pub max_concurrent: usize,
+    /// 0 değilse dosyanın başından (`start == 0`) başlayan gerçek indirme isteği her 64 KiB arasında
+    /// bu kadar bekler; diğer bağlantılar `throttle_ms` hızında kalır (tek yavaş parça simülasyonu).
+    pub slow_first_ms: u64,
 }
 
 impl Default for Cfg {
@@ -46,6 +49,7 @@ impl Default for Cfg {
             status_override: None,
             unknown_length: false,
             max_concurrent: 0,
+            slow_first_ms: 0,
         }
     }
 }
@@ -153,6 +157,7 @@ async fn handler(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respons
         b = b.header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{}", cfg.total));
     }
 
+    let delay_ms = if start == 0 && end > start && cfg.slow_first_ms > 0 { cfg.slow_first_ms } else { cfg.throttle_ms };
     let st2 = st.clone();
     let body = stream::unfold(start, move |pos| {
         let st = st2.clone();
@@ -161,8 +166,8 @@ async fn handler(State(st): State<Arc<AppState>>, headers: HeaderMap) -> Respons
             if len == 0 || pos > end {
                 return None;
             }
-            if st.cfg.throttle_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(st.cfg.throttle_ms)).await;
+            if delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             }
             let stop = (pos + 64 * 1024).min(end + 1);
             let chunk = Bytes::copy_from_slice(&st.data[pos..stop]);

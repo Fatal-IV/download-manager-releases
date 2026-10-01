@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { api } from './lib/api'
-import type { AddExtras, Download, Filter, Settings, SortKey } from './types'
+import type { AddExtras, AppNotification, Download, Filter, Settings, SortKey } from './types'
 
 type Theme = 'dark' | 'light'
 
@@ -8,11 +8,30 @@ interface State {
   downloads: Record<string, Download>
   filter: Filter
   query: string
+  /** Tür süzgeci; boş = tüm türler. */
+  category: string
+  setCategory: (c: string) => void
   sort: SortKey
   /** İndirme başına son hız örnekleri (bayt/sn), hız grafiği için. */
   speedHistory: Record<string, number[]>
   theme: Theme
   settings: Settings
+  /** Bildirim geçmişi, yeni üstte. */
+  notifications: AppNotification[]
+  /** Ekranda görünen toast bildirimleri (en çok 3). */
+  toasts: AppNotification[]
+  panelOpen: boolean
+  /** Bildirimden gidilen indirme; satır bunu görünce vurgulanır. */
+  focusId: string | null
+  setPanelOpen: (open: boolean) => void
+  markRead: (id: number) => void
+  markAllRead: () => void
+  removeNotification: (id: number) => void
+  clearNotifications: () => void
+  dismissToast: (id: number) => void
+  openNotification: (n: AppNotification) => void
+  focusDownload: (id: string) => void
+  clearFocus: () => void
   saveSettings: (patch: Partial<Settings>) => void
   init: () => () => void
   add: (url: string, connections: number, mirrors?: string[], extras?: AddExtras) => Promise<void>
@@ -43,7 +62,14 @@ export const useStore = create<State>((set, get) => ({
   sort: (localStorage.getItem('sort') as SortKey | null) ?? 'newest',
   speedHistory: {},
   theme: savedTheme,
-  settings: { connections: 8, spreadIps: true, maxConcurrent: 3, downloadDir: '', speedLimitKbps: 0, scheduleEnabled: false, scheduleStart: 120, scheduleEnd: 480, notifyOnComplete: true, sortByCategory: false, scanOnComplete: false },
+  settings: { connections: 8, spreadIps: true, maxConcurrent: 3, downloadDir: '', speedLimitKbps: 0, scheduleEnabled: false, scheduleStart: 120, scheduleEnd: 480, notifyOnComplete: true, sortByCategory: false, scanOnComplete: false, startMinimized: true, notifyKinds: { downloadComplete: true, downloadFailed: true, hash: true, verify: true, scan: true } },
+
+  notifications: [],
+  toasts: [],
+  panelOpen: false,
+  focusId: null,
+  category: '',
+  setCategory: (category) => set({ category }),
 
   saveSettings(patch) {
     const next = { ...get().settings, ...patch }
@@ -54,7 +80,52 @@ export const useStore = create<State>((set, get) => ({
       .catch(() => {})
   },
 
+  setPanelOpen: (panelOpen) => set({ panelOpen }),
+  markRead(id) {
+    set((s) => ({
+      notifications: s.notifications.map((n) => (n.id === id ? { ...n, read: true } : n)),
+      toasts: s.toasts.map((n) => (n.id === id ? { ...n, read: true } : n)),
+    }))
+    void api.markNotificationRead(id).catch(() => {})
+  },
+  markAllRead() {
+    set((s) => ({ notifications: s.notifications.map((n) => ({ ...n, read: true })) }))
+    void api.markAllNotificationsRead().catch(() => {})
+  },
+  removeNotification(id) {
+    set((s) => ({
+      notifications: s.notifications.filter((n) => n.id !== id),
+      toasts: s.toasts.filter((n) => n.id !== id),
+    }))
+    void api.deleteNotification(id).catch(() => {})
+  },
+  clearNotifications() {
+    set({ notifications: [], toasts: [] })
+    void api.clearNotifications().catch(() => {})
+  },
+  dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((n) => n.id !== id) })),
+  focusDownload(id) {
+    set({ filter: 'all', query: '', category: '', focusId: id })
+  },
+  clearFocus: () => set({ focusId: null }),
+  openNotification(n) {
+    get().markRead(n.id)
+    set((s) => ({ panelOpen: false, toasts: s.toasts.filter((t) => t.id !== n.id) }))
+    // Silinmiş indirmeye gidilemez; yalnızca okundu işaretlenir.
+    if (n.downloadId && get().downloads[n.downloadId]) get().focusDownload(n.downloadId)
+  },
+
   init() {
+    api
+      .listNotifications()
+      .then((notifications) => set({ notifications }))
+      .catch(() => {})
+    const offNotifications = api.subscribeNotifications((n) =>
+      set((s) => ({
+        notifications: [n, ...s.notifications.filter((x) => x.id !== n.id)].slice(0, 100),
+        toasts: [n, ...s.toasts.filter((x) => x.id !== n.id)].slice(0, 3),
+      })),
+    )
     api
       .getSettings()
       .then((settings) => set({ settings }))
@@ -62,7 +133,7 @@ export const useStore = create<State>((set, get) => ({
     api.list().then((list) =>
       set({ downloads: Object.fromEntries(list.map((d) => [d.id, d])) }),
     )
-    return api.subscribe(
+    const offDownloads = api.subscribe(
       (d) =>
         set((s) => {
           const next: Partial<State> = { downloads: { ...s.downloads, [d.id]: d } }
@@ -84,6 +155,10 @@ export const useStore = create<State>((set, get) => ({
           return { downloads: rest, speedHistory: history }
         }),
     )
+    return () => {
+      offDownloads()
+      offNotifications()
+    }
   },
 
   async add(url, connections, mirrors, extras) {

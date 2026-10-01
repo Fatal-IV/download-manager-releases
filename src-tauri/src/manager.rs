@@ -13,9 +13,10 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
 use crate::category;
+use crate::notifications::{self, Kind as NotifKind, NotificationDto};
 use crate::verify;
 use crate::video::{self, RunOutcome, RunSpec, Tools};
-use crate::engine::{self, filename, JobSpec, JobState, Limiter, Outcome, RunResult, SegMeta};
+use crate::engine::{self, filename, JobSpec, JobState, Limiter, Outcome, RunResult, SegMeta, Segment};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -108,6 +109,10 @@ pub struct Settings {
     pub sort_by_category: bool,
     /// İndirme bitince Windows Defender ile tara.
     pub scan_on_complete: bool,
+    /// Windows ile başlatıldığında pencere açılmadan tepside küçültülmüş başla.
+    pub start_minimized: bool,
+    /// Hangi uygulama içi bildirim gruplarının açık olduğu.
+    pub notify_kinds: crate::notifications::NotifyKinds,
 }
 
 impl Default for Settings {
@@ -124,6 +129,8 @@ impl Default for Settings {
             notify_on_complete: true,
             sort_by_category: false,
             scan_on_complete: false,
+            start_minimized: true,
+            notify_kinds: Default::default(),
         }
     }
 }
@@ -272,6 +279,8 @@ pub enum Event {
     /// İndirme yeni bitti ve kullanıcı bildirim istiyor.
     Completed(DownloadDto),
     Remove(String),
+    /// Uygulama içi bildirim oluştu.
+    Notify(NotificationDto),
 }
 
 type Emitter = Arc<dyn Fn(Event) + Send + Sync>;
@@ -354,6 +363,7 @@ impl Manager {
             .map_err(|e| e.to_string())?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, json TEXT NOT NULL);")
             .map_err(|e| e.to_string())?;
+        notifications::init(&db).map_err(|e| e.to_string())?;
         let settings: Settings = db
             .query_row("SELECT json FROM settings WHERE key = 'main'", [], |r| r.get::<_, String>(0))
             .ok()
@@ -425,6 +435,64 @@ impl Manager {
 
     pub fn settings(&self) -> Settings {
         lock(&self.0.settings).clone()
+    }
+
+    pub fn list_notifications(&self) -> Vec<NotificationDto> {
+        notifications::list(&lock(&self.0.db))
+    }
+
+    pub fn mark_notification_read(&self, id: i64) {
+        notifications::mark_read(&lock(&self.0.db), id);
+    }
+
+    pub fn mark_all_notifications_read(&self) {
+        notifications::mark_all_read(&lock(&self.0.db));
+    }
+
+    pub fn delete_notification(&self, id: i64) {
+        notifications::delete(&lock(&self.0.db), id);
+    }
+
+    pub fn clear_notifications(&self) {
+        notifications::clear(&lock(&self.0.db));
+    }
+
+    /// Ayardaki grup açıksa (ya da uyarı kritikse) bildirimi kaydeder ve arayüze yollar.
+    fn notify(&self, kind: NotifKind, download_id: Option<&str>, filename: &str, detail: Option<&str>) {
+        if !self.settings().notify_kinds.allows(kind) {
+            return;
+        }
+        let (title, body) = notifications::compose(kind, filename, detail);
+        let saved = notifications::insert(&lock(&self.0.db), kind, &title, &body, download_id);
+        if let Ok(dto) = saved {
+            (self.0.emit)(Event::Notify(dto));
+        }
+    }
+
+    /// İndirme tamamlandıysa ya da başarısız olduysa bildirim üretir; duraklatma bildirim üretmez.
+    fn notify_status(&self, rec: &Record) {
+        match rec.status {
+            Status::Completed => self.notify(NotifKind::DownloadComplete, Some(&rec.id), &rec.filename, None),
+            Status::Failed => self.notify(NotifKind::DownloadFailed, Some(&rec.id), &rec.filename, rec.error.as_deref()),
+            _ => {}
+        }
+    }
+
+    /// Tarama sonucunu işe yazar ve bildirir. `verdict`: "clean" | "threat" | "error".
+    fn record_scan_result(&self, id: &str, verdict: &str, error: Option<String>) {
+        self.update_job(id, |r| {
+            r.scan = Some(verdict.into());
+            if error.is_some() {
+                r.error = error.clone();
+            }
+        });
+        let Some((name, detail)) = lock(&self.0.jobs).get(id).map(|j| (j.rec.filename.clone(), error)) else { return };
+        let kind = match verdict {
+            "clean" => NotifKind::ScanClean,
+            "threat" => NotifKind::ScanThreat,
+            _ => NotifKind::ScanError,
+        };
+        self.notify(kind, Some(id), &name, detail.as_deref());
     }
 
     pub fn default_download_dir(&self) -> PathBuf {
@@ -758,8 +826,8 @@ impl Manager {
         }
     }
 
-    fn progress(&self, id: &str, per_segment: &[u64], meta: &[SegMeta]) {
-        let bytes: u64 = per_segment.iter().sum();
+    fn progress(&self, id: &str, segments: &[Segment], meta: &[SegMeta]) {
+        let bytes: u64 = segments.iter().map(|s| s.downloaded).sum();
         let mut jobs = lock(&self.0.jobs);
         let Some(job) = jobs.get_mut(id) else { return };
         if job.rec.status != Status::Downloading {
@@ -775,9 +843,8 @@ impl Manager {
         job.rec.downloaded = bytes;
         job.meta = meta.to_vec();
         if let Some(st) = job.rec.state.as_mut() {
-            for (seg, d) in st.segments.iter_mut().zip(per_segment) {
-                seg.downloaded = *d;
-            }
+            // Parça listesi indirme sırasında değişebilir (boşta kalan bağlantı parça böler).
+            st.segments = segments.to_vec();
         }
         // Çökme olursa en fazla birkaç saniyelik ilerleme kaybolsun.
         if job.last_persist.elapsed() >= Duration::from_secs(3) {
@@ -909,7 +976,7 @@ impl Manager {
             &spec,
             state,
             token,
-            Arc::new(move |segs: &[u64], meta: &[SegMeta]| me.progress(&pid, segs, meta)),
+            Arc::new(move |segs: &[Segment], meta: &[SegMeta]| me.progress(&pid, segs, meta)),
         )
         .await;
         self.finish(&id, result);
@@ -995,6 +1062,7 @@ impl Manager {
             }
         }
         self.persist(&job.rec);
+        self.notify_status(&job.rec);
         let notify = completed && self.settings().notify_on_complete;
         (self.0.emit)(if notify { Event::Completed(job.dto()) } else { Event::Update(job.dto()) });
         if completed {
@@ -1011,6 +1079,7 @@ impl Manager {
         job.rec.status = Status::Failed;
         job.rec.error = Some(msg);
         self.persist(&job.rec);
+        self.notify_status(&job.rec);
         (self.0.emit)(Event::Update(job.dto()));
     }
 
@@ -1047,6 +1116,7 @@ impl Manager {
         }
         job.rec.state = Some(result.state);
         self.persist(&job.rec);
+        self.notify_status(&job.rec);
         let done = job.rec.status == Status::Completed && self.settings().notify_on_complete;
         (self.0.emit)(if done { Event::Completed(job.dto()) } else { Event::Update(job.dto()) });
         if completed {
@@ -1090,7 +1160,17 @@ impl Manager {
     async fn hash_now(&self, id: &str) {
         let Some(path) = self.completed_path(id) else { return };
         let Ok(Ok(digest)) = tokio::task::spawn_blocking(move || verify::sha256_file(&path)).await else { return };
-        self.update_job(id, |r| r.sha256 = Some(digest));
+        self.update_job(id, |r| r.sha256 = Some(digest.clone()));
+        let Some((name, expected)) =
+            lock(&self.0.jobs).get(id).map(|j| (j.rec.filename.clone(), j.rec.expected_sha256.clone()))
+        else {
+            return;
+        };
+        self.notify(NotifKind::Hash, Some(id), &name, Some(&digest));
+        if let Some(want) = expected {
+            let kind = if want == digest { NotifKind::VerifyOk } else { NotifKind::VerifyFail };
+            self.notify(kind, Some(id), &name, None);
+        }
     }
 
     /// Windows Defender taramasını arka planda başlatır.
@@ -1110,12 +1190,7 @@ impl Manager {
             Ok(false) => ("threat", None),
             Err(e) => ("error", Some(format!("Virüs taraması: {e}"))),
         };
-        self.update_job(id, |r| {
-            r.scan = Some(verdict.0.into());
-            if verdict.1.is_some() {
-                r.error = verdict.1;
-            }
-        });
+        self.record_scan_result(id, verdict.0, verdict.1);
     }
 }
 
@@ -1173,6 +1248,172 @@ mod tests {
         let d = wait_for(&m, &none.id, |d| d.sha256.is_some()).await;
         assert_eq!((d.verified, d.sha256.as_deref()), (None, Some(good.as_str())));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn temp_manager(emit: Emitter) -> (Manager, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("dm-notif-{}", rand_suffix()));
+        std::fs::create_dir_all(&dir).unwrap();
+        (Manager::new(dir.join("t.db"), dir.clone(), emit).unwrap(), dir)
+    }
+
+    /// Koşul sağlanana kadar bildirim listesini yoklar (bildirimler durum geçişinden hemen sonra yazılır).
+    async fn wait_notifs(m: &Manager, pred: impl Fn(&[NotificationDto]) -> bool) -> Vec<NotificationDto> {
+        for _ in 0..300 {
+            let all = m.list_notifications();
+            if pred(&all) {
+                return all;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("beklenen bildirim gelmedi: {:?}", m.list_notifications());
+    }
+
+    fn has(all: &[NotificationDto], kind: &str, id: &str) -> bool {
+        all.iter().any(|n| n.kind == kind && n.download_id.as_deref() == Some(id))
+    }
+
+    #[tokio::test]
+    async fn completed_and_failed_downloads_create_notifications() {
+        let ok_srv = spawn(Cfg { total: 256 * 1024, ..Cfg::default() }).await;
+        let bad_srv = spawn(Cfg { total: 256 * 1024, status_override: Some(403), ..Cfg::default() }).await;
+        let (m, dir) = temp_manager(Arc::new(|_| {}));
+
+        let ok = m.add(req(&ok_srv.url)).unwrap();
+        let all = wait_notifs(&m, |a| has(a, "download_complete", &ok.id)).await;
+        let n = all.iter().find(|n| n.kind == "download_complete").unwrap();
+        assert_eq!((n.level.as_str(), n.title.as_str()), ("success", "İndirme tamamlandı"));
+
+        let bad = m.add(req(&bad_srv.url)).unwrap();
+        let all = wait_notifs(&m, |a| has(a, "download_failed", &bad.id)).await;
+        let n = all.iter().find(|n| n.kind == "download_failed").unwrap();
+        assert_eq!(n.level, "danger");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn hash_and_verification_create_notifications() {
+        use crate::engine::testserver::pattern;
+        let total = 256 * 1024;
+        let srv = spawn(Cfg { total, ..Cfg::default() }).await;
+        let good = verify::sha256_bytes(&pattern(total));
+        let (m, dir) = temp_manager(Arc::new(|_| {}));
+
+        let ok = m.add(AddRequest { expected_sha256: Some(good.clone()), ..req(&srv.url) }).unwrap();
+        let all = wait_notifs(&m, |a| has(a, "hash", &ok.id) && has(a, "verify_ok", &ok.id)).await;
+        let h = all.iter().find(|n| n.kind == "hash").unwrap();
+        assert!(h.body.ends_with(&format!("\n{good}")), "gövdede tam özet olmalı: {}", h.body);
+
+        let bad = m.add(AddRequest { expected_sha256: Some("0".repeat(64)), ..req(&format!("{}?b", srv.url)) }).unwrap();
+        let all = wait_notifs(&m, |a| has(a, "hash", &bad.id) && has(a, "verify_fail", &bad.id)).await;
+        assert!(!has(&all, "verify_ok", &bad.id));
+
+        let none = m.add(req(&format!("{}?n", srv.url))).unwrap();
+        wait_for(&m, &none.id, |d| d.status == Status::Completed).await;
+        m.hash(&none.id);
+        let all = wait_notifs(&m, |a| has(a, "hash", &none.id)).await;
+        assert!(!has(&all, "verify_ok", &none.id) && !has(&all, "verify_fail", &none.id));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn scan_result_creates_notification() {
+        let srv = spawn(Cfg { total: 128 * 1024, ..Cfg::default() }).await;
+        let (m, dir) = temp_manager(Arc::new(|_| {}));
+        let d = m.add(req(&srv.url)).unwrap();
+        wait_for(&m, &d.id, |d| d.status == Status::Completed).await;
+
+        m.record_scan_result(&d.id, "threat", None);
+        m.record_scan_result(&d.id, "clean", None);
+        m.record_scan_result(&d.id, "error", Some("Virüs taraması: x".into()));
+        let all = m.list_notifications();
+        let threat = all.iter().find(|n| n.kind == "scan_threat").unwrap();
+        assert_eq!((threat.level.as_str(), threat.download_id.as_deref()), ("danger", Some(d.id.as_str())));
+        assert!(all.iter().any(|n| n.kind == "scan_clean" && n.level == "success"));
+        let err = all.iter().find(|n| n.kind == "scan_error").unwrap();
+        assert!(err.body.ends_with("x"), "{}", err.body);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn disabled_groups_suppress_notifications_but_not_critical() {
+        use crate::notifications::NotifyKinds;
+        let total = 128 * 1024;
+        let srv = spawn(Cfg { total, ..Cfg::default() }).await;
+        let (m, dir) = temp_manager(Arc::new(|_| {}));
+        let mut s = m.settings();
+        s.notify_kinds = NotifyKinds { download_complete: false, download_failed: false, hash: false, verify: false, scan: false };
+        m.set_settings(s);
+
+        let d = m.add(req(&srv.url)).unwrap();
+        wait_for(&m, &d.id, |d| d.status == Status::Completed).await;
+        m.hash(&d.id);
+        wait_for(&m, &d.id, |d| d.sha256.is_some()).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(m.list_notifications().is_empty(), "kapalı gruplar bildirim üretmemeli: {:?}", m.list_notifications());
+
+        m.record_scan_result(&d.id, "clean", None);
+        assert!(m.list_notifications().is_empty());
+        m.record_scan_result(&d.id, "threat", None);
+        assert!(has(&m.list_notifications(), "scan_threat", &d.id), "tehdit uyarısı kapatılamaz");
+
+        let bad = m.add(AddRequest { expected_sha256: Some("0".repeat(64)), ..req(&format!("{}?b", srv.url)) }).unwrap();
+        let all = wait_notifs(&m, |a| has(a, "verify_fail", &bad.id)).await;
+        assert!(!has(&all, "hash", &bad.id) && !has(&all, "verify_ok", &bad.id));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn notification_history_survives_restart_and_read_state_is_kept() {
+        let srv = spawn(Cfg { total: 128 * 1024, ..Cfg::default() }).await;
+        let (m, dir) = temp_manager(Arc::new(|_| {}));
+        let d = m.add(req(&srv.url)).unwrap();
+        let all = wait_notifs(&m, |a| has(a, "download_complete", &d.id)).await;
+        let id = all.iter().find(|n| n.kind == "download_complete").unwrap().id;
+        m.mark_notification_read(id);
+        drop(m);
+
+        let m2 = Manager::new(dir.join("t.db"), dir.clone(), Arc::new(|_| {})).unwrap();
+        let back = m2.list_notifications();
+        let n = back.iter().find(|n| n.id == id).expect("geçmiş kalmalı");
+        assert!(n.read);
+        m2.delete_notification(id);
+        assert!(m2.list_notifications().iter().all(|n| n.id != id));
+        m2.mark_all_notifications_read();
+        m2.clear_notifications();
+        assert!(m2.list_notifications().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn notify_event_is_emitted() {
+        let srv = spawn(Cfg { total: 128 * 1024, ..Cfg::default() }).await;
+        let seen: Arc<Mutex<Vec<String>>> = Arc::default();
+        let sink = seen.clone();
+        let (m, dir) = temp_manager(Arc::new(move |ev| {
+            if let Event::Notify(n) = ev {
+                sink.lock().unwrap().push(n.kind);
+            }
+        }));
+        m.add(req(&srv.url)).unwrap();
+        for _ in 0..100 {
+            if seen.lock().unwrap().iter().any(|k| k == "download_complete") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(seen.lock().unwrap().iter().any(|k| k == "download_complete"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_settings_json_enables_all_notification_groups() {
+        let old: Settings = serde_json::from_str(r#"{"connections":4}"#).unwrap();
+        assert_eq!(old.notify_kinds, crate::notifications::NotifyKinds::default());
+        assert!(old.notify_kinds.download_complete && old.notify_kinds.download_failed);
+        assert!(old.notify_kinds.hash && old.notify_kinds.verify && old.notify_kinds.scan);
+        // Kısmi kayıt: yalnız belirtilen grup değişir.
+        let part: Settings = serde_json::from_str(r#"{"notifyKinds":{"hash":false}}"#).unwrap();
+        assert!(!part.notify_kinds.hash && part.notify_kinds.scan);
     }
 
     fn window(start: u32, end: u32) -> Settings {

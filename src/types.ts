@@ -88,6 +88,9 @@ export interface Settings {
   sortByCategory: boolean
   /** Bitince Windows Defender ile tara. */
   scanOnComplete: boolean
+  startMinimized: boolean
+  /** Hangi uygulama içi bildirim gruplarının açık olduğu. */
+  notifyKinds: NotifyKinds
 }
 
 export const CATEGORIES = ['Video', 'Müzik', 'Görseller', 'Belgeler', 'Arşivler', 'Programlar', 'Diğer'] as const
@@ -118,6 +121,46 @@ export interface Api {
   hash(id: string): Promise<void>
   /** Tamamlanan dosyayı Windows Defender ile tarar; sonuç abonelik olayıyla gelir. */
   scan(id: string): Promise<void>
+  listNotifications(): Promise<AppNotification[]>
+  markNotificationRead(id: number): Promise<void>
+  markAllNotificationsRead(): Promise<void>
+  deleteNotification(id: number): Promise<void>
+  clearNotifications(): Promise<void>
+  /** Yeni bildirimlere abone olur; aboneliği bitiren fonksiyonu döndürür. */
+  subscribeNotifications(onNew: (n: AppNotification) => void): () => void
   /** Motor olaylarına abone olur; aboneliği bitiren fonksiyonu döndürür. */
   subscribe(onUpdate: (d: Download) => void, onRemove: (id: string) => void): () => void
+}
+
+export type NotificationKind =
+  | 'download_complete'
+  | 'download_failed'
+  | 'hash'
+  | 'verify_ok'
+  | 'verify_fail'
+  | 'scan_clean'
+  | 'scan_error'
+  | 'scan_threat'
+
+export type NotificationLevel = 'info' | 'success' | 'danger'
+
+/** Uygulama içi bildirim (tarayıcının `Notification` türüyle karışmasın diye bu ad). */
+export interface AppNotification {
+  id: number
+  kind: NotificationKind
+  level: NotificationLevel
+  title: string
+  body: string
+  downloadId: string | null
+  /** Unix ms. */
+  createdAt: number
+  read: boolean
+}
+
+export interface NotifyKinds {
+  downloadComplete: boolean
+  downloadFailed: boolean
+  hash: boolean
+  verify: boolean
+  scan: boolean
 }

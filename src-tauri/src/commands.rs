@@ -4,6 +4,7 @@ use tauri::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
 
 use crate::manager::{AddRequest, DownloadDto, Manager, Settings};
+use crate::notifications::NotificationDto;
 use crate::speedtest;
 
 /// Çalışan hız testinin iptal belirteci; aynı anda tek test çalışır.
@@ -200,4 +201,29 @@ pub fn cancel_speed_test(st: State<'_, SpeedTestState>) {
     if let Some(t) = st.0.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         t.cancel();
     }
+}
+
+#[tauri::command]
+pub fn list_notifications(m: State<'_, Manager>) -> Vec<NotificationDto> {
+    m.list_notifications()
+}
+
+#[tauri::command]
+pub fn mark_notification_read(m: State<'_, Manager>, id: i64) {
+    m.mark_notification_read(id);
+}
+
+#[tauri::command]
+pub fn mark_all_notifications_read(m: State<'_, Manager>) {
+    m.mark_all_notifications_read();
+}
+
+#[tauri::command]
+pub fn delete_notification(m: State<'_, Manager>, id: i64) {
+    m.delete_notification(id);
+}
+
+#[tauri::command]
+pub fn clear_notifications(m: State<'_, Manager>) {
+    m.clear_notifications();
 }

@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import type { Api, Download, Settings, SpeedUpdate } from '../types'
+import type { Api, AppNotification, Download, Settings, SpeedUpdate } from '../types'
 
 /** Rust motoruna Tauri komutları ve olayları üzerinden bağlanır. */
 export function createTauriApi(): Api {
@@ -33,6 +33,15 @@ export function createTauriApi(): Api {
     reveal: (id) => invoke('reveal_download', { id }),
     hash: (id) => invoke('hash_download', { id }),
     scan: (id) => invoke('scan_download', { id }),
+    listNotifications: () => invoke<AppNotification[]>('list_notifications'),
+    markNotificationRead: (id) => invoke('mark_notification_read', { id }),
+    markAllNotificationsRead: () => invoke('mark_all_notifications_read'),
+    deleteNotification: (id) => invoke('delete_notification', { id }),
+    clearNotifications: () => invoke('clear_notifications'),
+    subscribeNotifications(onNew) {
+      const off = listen<AppNotification>('notification', (e) => onNew(e.payload))
+      return () => void off.then((f) => f())
+    },
     subscribe(onUpdate, onRemove) {
       const offs = [
         listen<Download>('download-update', (e) => onUpdate(e.payload)),

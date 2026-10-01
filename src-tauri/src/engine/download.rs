@@ -1,7 +1,7 @@
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -61,8 +61,66 @@ pub struct SegMeta {
     pub connections_opened: u32,
 }
 
-fn snapshot(meta: &[Mutex<SegMeta>]) -> Vec<SegMeta> {
-    meta.iter().map(|m| m.lock().unwrap_or_else(|e| e.into_inner()).clone()).collect()
+fn lk<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Çalışan bir parça. Bitişi, boşta kalan bir bağlantı kalan kısmı devralınca küçülebilir; bu yüzden
+/// bitiş ile inen miktar tek kilit altında tutulur ve her yazma önce buradan pay alır.
+struct Slot {
+    /// Oluşturulma sırası; kaynak/IP seçiminde parçayı ayırt eder.
+    id: usize,
+    start: u64,
+    range: Mutex<SlotRange>,
+    meta: Mutex<SegMeta>,
+}
+
+struct SlotRange {
+    end: u64,
+    downloaded: u64,
+}
+
+impl Slot {
+    fn new(id: usize, seg: Segment) -> Self {
+        Slot {
+            id,
+            start: seg.start,
+            range: Mutex::new(SlotRange { end: seg.end, downloaded: seg.downloaded }),
+            meta: Mutex::new(SegMeta::default()),
+        }
+    }
+
+    fn segment(&self) -> Segment {
+        let r = lk(&self.range);
+        Segment { start: self.start, end: r.end, downloaded: r.downloaded }
+    }
+
+    /// Parçanın sınırı içinde kalarak en fazla `want` bayt pay alır; payı kadar inmiş sayılır.
+    fn reserve(&self, want: u64) -> u64 {
+        let mut r = lk(&self.range);
+        let left = (r.end + 1).saturating_sub(self.start + r.downloaded);
+        let n = want.min(left);
+        r.downloaded += n;
+        n
+    }
+
+    /// Diske yazılamayan payı geri verir.
+    fn release(&self, n: u64) {
+        lk(&self.range).downloaded -= n;
+    }
+
+    /// Aralık sınırı olmayan (Range'siz) akış için ham sayaç.
+    fn add_unbounded(&self, n: u64) {
+        lk(&self.range).downloaded += n;
+    }
+
+    fn reset(&self) {
+        lk(&self.range).downloaded = 0;
+    }
+
+    fn downloaded(&self) -> u64 {
+        lk(&self.range).downloaded
+    }
 }
 
 /// Duraklatıp devam etmek için saklanması gereken her şey.
@@ -264,12 +322,49 @@ struct Shared {
     total: Option<u64>,
     /// Devam ediliyorsa sunucuya `If-Range` ile kaynağın değişmediğini doğrulatırız.
     resuming: bool,
-    segments: Vec<Segment>,
-    meta: Vec<Mutex<SegMeta>>,
+    /// Tüm parçalar, oluşturulma sırasıyla. Bölünme yeni parça ekler; var olan hiç silinmez.
+    parts: Mutex<Vec<Arc<Slot>>>,
     /// Aynı anda açık olabilecek bağlantı sayısı; sunucu 429 verirse azalır.
     slots: Arc<Semaphore>,
     cap: AtomicUsize,
     limiter: Option<Arc<super::Limiter>>,
+}
+
+impl Shared {
+    /// Parçaları ve kayıtlarını dosya konumuna göre sıralı döner.
+    fn snapshot(&self) -> (Vec<Segment>, Vec<SegMeta>) {
+        let mut all: Vec<(Segment, SegMeta)> =
+            lk(&self.parts).iter().map(|p| (p.segment(), lk(&p.meta).clone())).collect();
+        all.sort_by_key(|(s, _)| s.start);
+        all.into_iter().unzip()
+    }
+
+    /// Boşta kalan bağlantı için en çok baytı kalan parçanın ikinci yarısını yeni parça yapar.
+    /// Bölünecek yer yoksa `None`.
+    fn split_largest(&self) -> Option<Arc<Slot>> {
+        if !self.ranged {
+            return None;
+        }
+        let mut parts = lk(&self.parts);
+        let victim = parts
+            .iter()
+            .filter_map(|p| {
+                let r = lk(&p.range);
+                let pos = p.start + r.downloaded;
+                segment::split_point(pos, r.end).map(|_| (r.end + 1 - pos, p))
+            })
+            .max_by_key(|(left, _)| *left)
+            .map(|(_, p)| p.clone())?;
+        let mut r = lk(&victim.range);
+        // Yukarıdaki ölçümden sonra parça ilerlemiş olabilir; konumu kilit altında yeniden hesapla.
+        let mid = segment::split_point(victim.start + r.downloaded, r.end)?;
+        let tail = Segment { start: mid, end: r.end, downloaded: 0 };
+        r.end = mid - 1;
+        drop(r);
+        let slot = Arc::new(Slot::new(parts.len(), tail));
+        parts.push(slot.clone());
+        Some(slot)
+    }
 }
 
 /// İndirmeyi çalıştırır. `cancel` tetiklenirse indirilen kısım korunarak `Paused` döner.
@@ -278,7 +373,7 @@ pub async fn run(
     spec: &JobSpec,
     mut state: JobState,
     cancel: CancellationToken,
-    on_progress: Arc<dyn Fn(&[u64], &[SegMeta]) + Send + Sync>,
+    on_progress: Arc<dyn Fn(&[Segment], &[SegMeta]) + Send + Sync>,
 ) -> RunResult {
     // Range desteklemeyen sunucuda kaldığı yerden devam edilemez; baştan başlarız.
     if !state.accepts_ranges {
@@ -287,35 +382,37 @@ pub async fn run(
         }
     }
 
-    let counters: Arc<Vec<AtomicU64>> =
-        Arc::new(state.segments.iter().map(|s| AtomicU64::new(s.downloaded)).collect());
     let sources = build_sources(client, spec, &state).await;
+    let parts: Vec<Arc<Slot>> =
+        state.segments.iter().enumerate().map(|(i, s)| Arc::new(Slot::new(i, *s))).collect();
+    let pending: Vec<Arc<Slot>> = parts
+        .iter()
+        .filter(|p| !(state.total.is_some() && p.segment().is_done()))
+        .cloned()
+        .collect();
+    // Önceki bölünmelerden çok parça kalmış olsa da kullanıcının bağlantı sayısını aşmayız.
+    let permits = pending.len().min(spec.connections.max(1) as usize).max(1);
     let shared = Arc::new(Shared {
         sources,
         part_path: state.part_path.clone(),
         ranged: state.ranged(),
         total: state.total,
         resuming: state.downloaded() > 0,
-        segments: state.segments.clone(),
-        meta: state.segments.iter().map(|_| Mutex::new(SegMeta::default())).collect(),
-        slots: Arc::new(Semaphore::new(state.segments.len().max(1))),
-        cap: AtomicUsize::new(state.segments.len().max(1)),
+        parts: Mutex::new(parts),
+        slots: Arc::new(Semaphore::new(permits)),
+        cap: AtomicUsize::new(permits),
         limiter: spec.limiter.clone(),
     });
 
     // Bir parça hata verirse kardeşlerini durdurmak için ayrı bir alt belirteç.
     let stop = cancel.child_token();
     let mut set = JoinSet::new();
-    for idx in 0..state.segments.len() {
-        if state.total.is_some() && state.segments[idx].is_done() {
-            continue;
-        }
-        set.spawn(fetch_segment(shared.clone(), idx, counters.clone(), stop.clone()));
+    for slot in pending {
+        set.spawn(fetch_segment(shared.clone(), slot, stop.clone()));
     }
 
     let reporter_stop = CancellationToken::new();
     let reporter = tokio::spawn({
-        let counters = counters.clone();
         let shared = shared.clone();
         let stop = reporter_stop.clone();
         let cb = on_progress.clone();
@@ -324,8 +421,8 @@ pub async fn run(
                 tokio::select! {
                     _ = stop.cancelled() => break,
                     _ = tokio::time::sleep(PROGRESS_INTERVAL) => {
-                        let snap: Vec<u64> = counters.iter().map(|c| c.load(Ordering::Relaxed)).collect();
-                        cb(&snap, &snapshot(&shared.meta));
+                        let (segs, meta) = shared.snapshot();
+                        cb(&segs, &meta);
                     }
                 }
             }
@@ -335,7 +432,15 @@ pub async fn run(
     let mut failure: Option<String> = None;
     while let Some(res) = set.join_next().await {
         let err = match res {
-            Ok(Ok(())) => continue,
+            Ok(Ok(())) => {
+                // Bağlantı boşa çıktı: en çok baytı kalan parçayı paylaşarak çalışmaya devam et.
+                if failure.is_none() && !stop.is_cancelled() {
+                    if let Some(slot) = shared.split_largest() {
+                        set.spawn(fetch_segment(shared.clone(), slot, stop.clone()));
+                    }
+                }
+                continue;
+            }
             Ok(Err(e)) => e.to_string(),
             Err(join) => join.to_string(),
         };
@@ -345,13 +450,9 @@ pub async fn run(
     reporter_stop.cancel();
     let _ = reporter.await;
 
-    for (seg, c) in state.segments.iter_mut().zip(counters.iter()) {
-        seg.downloaded = c.load(Ordering::Relaxed);
-    }
-    on_progress(
-        &state.segments.iter().map(|s| s.downloaded).collect::<Vec<_>>(),
-        &snapshot(&shared.meta),
-    );
+    let (segs, meta) = shared.snapshot();
+    state.segments = segs;
+    on_progress(&state.segments, &meta);
 
     // Boyut bilinmiyorsa akışın sorunsuz bitmesi tamamlanma demektir.
     if state.total.is_none() && failure.is_none() && !cancel.is_cancelled() {
@@ -392,10 +493,10 @@ async fn finalize(state: &mut JobState) -> Result<PathBuf, EngineError> {
 /// eşzamanlı bağlantı sayısını azaltıp `Retry-After` kadar bekler.
 async fn fetch_segment(
     sh: Arc<Shared>,
-    idx: usize,
-    counters: Arc<Vec<AtomicU64>>,
+    slot: Arc<Slot>,
     cancel: CancellationToken,
 ) -> Result<(), EngineError> {
+    let idx = slot.id;
     let mut attempt = 0;
     let mut throttled = 0;
     // Kaynak kayması: bir yansı başarısız olursa parça sıradaki kaynağa geçer.
@@ -416,7 +517,7 @@ async fn fetch_segment(
         let n = sh.sources.len();
         let src = &sh.sources[(idx + shift) % n];
         let client = &src.clients[(idx / n + failures) % src.clients.len()];
-        let wait = match try_once(&sh, src, client, idx, &counters[idx], &cancel).await {
+        let wait = match try_once(&sh, src, client, &slot, &cancel).await {
             Ok(()) => return Ok(()),
             Err(EngineError::Throttled { retry_after }) if throttled < MAX_THROTTLE_RETRIES => {
                 throttled += 1;
@@ -461,18 +562,19 @@ async fn try_once(
     sh: &Shared,
     src: &Source,
     client: &Client,
-    idx: usize,
-    counter: &AtomicU64,
+    slot: &Slot,
     cancel: &CancellationToken,
 ) -> Result<(), EngineError> {
-    let seg = sh.segments[idx];
+    // Bölünme parçanın bitişini istek sürerken değiştirebilir; istek anındaki hali kullanılır,
+    // akış sırasında `reserve` güncel sınırı uygular.
+    let seg = slot.segment();
     let mut req = client.get(&src.url);
     for (k, v) in &src.headers {
         req = req.header(k, v);
     }
 
     let start = if sh.ranged {
-        let done = counter.load(Ordering::Relaxed);
+        let done = seg.downloaded;
         if done >= seg.len() {
             return Ok(());
         }
@@ -486,7 +588,7 @@ async fn try_once(
         start
     } else {
         // Range yok: her denemede baştan yazarız.
-        counter.store(0, Ordering::Relaxed);
+        slot.reset();
         0
     };
 
@@ -496,7 +598,7 @@ async fn try_once(
         return Err(EngineError::Throttled { retry_after: retry_after(&resp) });
     }
     {
-        let mut m = sh.meta[idx].lock().unwrap_or_else(|e| e.into_inner());
+        let mut m = lk(&slot.meta);
         m.range = if sh.ranged { format!("bytes={start}-{}", seg.end) } else { "(tümü)".into() };
         m.http_status = status.as_u16();
         m.content_range = resp
@@ -538,29 +640,36 @@ async fn try_once(
                     return Err(e.into());
                 }
                 Some(Ok(chunk)) => {
-                    let mut data: &[u8] = &chunk;
-                    if sh.ranged {
-                        // Sunucu istenenden fazla gönderirse komşu parçanın alanına taşmayalım.
-                        let remaining = seg.len() - counter.load(Ordering::Relaxed);
-                        if remaining == 0 {
-                            break;
-                        }
-                        if data.len() as u64 > remaining {
-                            data = &data[..remaining as usize];
-                        }
-                    }
                     if let Some(l) = &sh.limiter {
                         // Beklerken duraklatılırsa hemen çık; akış okunmadıkça TCP de yavaşlar.
                         tokio::select! {
-                            _ = l.acquire(data.len()) => {}
+                            _ = l.acquire(chunk.len()) => {}
                             _ = cancel.cancelled() => {
                                 file.flush().await?;
                                 return Ok(());
                             }
                         }
                     }
-                    file.write_all(data).await?;
-                    counter.fetch_add(data.len() as u64, Ordering::Relaxed);
+                    let n = if sh.ranged {
+                        // Parçanın (bölünmeyle küçülmüş olabilecek) sınırını aşan bayt komşu parçanın
+                        // alanına yazılmasın; sunucu fazla gönderse bile kırpılır.
+                        let n = slot.reserve(chunk.len() as u64);
+                        if n == 0 {
+                            break;
+                        }
+                        n as usize
+                    } else {
+                        chunk.len()
+                    };
+                    if let Err(e) = file.write_all(&chunk[..n]).await {
+                        if sh.ranged {
+                            slot.release(n as u64);
+                        }
+                        return Err(e.into());
+                    }
+                    if !sh.ranged {
+                        slot.add_unbounded(n as u64);
+                    }
                 }
             }
         }
@@ -568,8 +677,8 @@ async fn try_once(
     file.flush().await?;
 
     if let Some(total) = sh.total {
-        let expected = if sh.ranged { seg.len() } else { total };
-        if counter.load(Ordering::Relaxed) < expected {
+        let expected = if sh.ranged { slot.segment().len() } else { total };
+        if slot.downloaded() < expected {
             return Err(EngineError::Truncated);
         }
     }
@@ -585,7 +694,7 @@ mod tests {
         JobSpec { url, dest_dir: dir.to_path_buf(), filename: None, connections, headers: vec![], mirrors: vec![], spread_ips: false, limiter: None }
     }
 
-    fn noop() -> Arc<dyn Fn(&[u64], &[SegMeta]) + Send + Sync> {
+    fn noop() -> Arc<dyn Fn(&[Segment], &[SegMeta]) + Send + Sync> {
         Arc::new(|_, _| {})
     }
 
@@ -598,19 +707,88 @@ mod tests {
         let state = prepare(&client, &sp).await.unwrap();
         let last: Arc<Mutex<Vec<SegMeta>>> = Arc::default();
         let sink = last.clone();
-        let cb: Arc<dyn Fn(&[u64], &[SegMeta]) + Send + Sync> =
+        let cb: Arc<dyn Fn(&[Segment], &[SegMeta]) + Send + Sync> =
             Arc::new(move |_, m| *sink.lock().unwrap() = m.to_vec());
         let res = run(&client, &sp, state.clone(), CancellationToken::new(), cb).await;
         assert!(matches!(res.outcome, Outcome::Completed(_)));
         let meta = last.lock().unwrap().clone();
-        assert_eq!(meta.len(), 4);
-        for (m, seg) in meta.iter().zip(&state.segments) {
+        // Hızlı sunucuda boşa çıkan bağlantı bir parçayı bölebilir; en az ilk dördü vardır.
+        assert!(meta.len() >= 4);
+        assert_eq!(meta.len(), res.state.segments.len());
+        for (m, seg) in meta.iter().zip(&res.state.segments) {
             assert_eq!(m.http_status, 206);
-            assert_eq!(m.range, format!("bytes={}-{}", seg.start, seg.end));
-            assert!(m.content_range.as_deref().unwrap().starts_with(&format!("bytes {}-{}/", seg.start, seg.end)));
+            // İstek anındaki bitiş, sonradan bölünmeyle küçülmüş olabilir; başlangıç değişmez.
+            assert!(m.range.starts_with(&format!("bytes={}-", seg.start)), "{} / {}", m.range, seg.start);
+            assert!(m.content_range.as_deref().unwrap().starts_with(&format!("bytes {}-", seg.start)));
             assert!(m.remote.is_some());
             assert_eq!(m.connections_opened, 1);
         }
+    }
+
+    /// Parçalar boşluksuz, çakışmasız ve tamamen inmiş olmalı.
+    fn assert_tiled(state: &JobState, total: u64) {
+        let mut segs = state.segments.clone();
+        segs.sort_by_key(|s| s.start);
+        assert_eq!(segs.first().unwrap().start, 0);
+        assert_eq!(segs.last().unwrap().end, total - 1);
+        for w in segs.windows(2) {
+            assert_eq!(w[0].end + 1, w[1].start, "boşluk ya da çakışma var");
+        }
+        for s in &segs {
+            assert_eq!(s.downloaded, s.len(), "parça {}-{} eksik ya da fazla indi", s.start, s.end);
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_connection_takes_half_of_the_slowest_segment() {
+        // İlk parça yavaş; diğer üçü hemen biter ve boşta kalan bağlantılar onu paylaşmalı.
+        let total = 4 * 1024 * 1024;
+        let srv = spawn(Cfg { total, slow_first_ms: 40, ..Cfg::default() }).await;
+        let dir = tempfile::tempdir().unwrap();
+        let client = Client::new();
+        let sp = spec(srv.url.clone(), dir.path(), 4);
+        let state = prepare(&client, &sp).await.unwrap();
+        assert_eq!(state.segments.len(), 4);
+
+        let res = run(&client, &sp, state, CancellationToken::new(), noop()).await;
+        let Outcome::Completed(path) = res.outcome else { panic!("{:?}", res.outcome) };
+        assert_eq!(std::fs::read(path).unwrap(), pattern(total));
+        assert!(res.state.segments.len() > 4, "yavaş parça bölünmedi: {} parça", res.state.segments.len());
+        assert_tiled(&res.state, total as u64);
+        assert!(srv.peak_concurrent() <= 4, "bağlantı sınırı aşıldı: {}", srv.peak_concurrent());
+    }
+
+    #[tokio::test]
+    async fn pause_and_resume_after_a_split_keeps_the_file_exact() {
+        let total = 4 * 1024 * 1024;
+        let srv = spawn(Cfg { total, slow_first_ms: 40, ..Cfg::default() }).await;
+        let dir = tempfile::tempdir().unwrap();
+        let client = Client::new();
+        let sp = spec(srv.url.clone(), dir.path(), 4);
+        let state = prepare(&client, &sp).await.unwrap();
+
+        let cancel = CancellationToken::new();
+        let c2 = cancel.clone();
+        tokio::spawn(async move {
+            // Hızlı parçalar birkaç ms'de biter ve yavaşı böler; yavaş kalan kısım ~160 ms sürer.
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            c2.cancel();
+        });
+        let paused = run(&client, &sp, state, cancel, noop()).await;
+        assert_eq!(paused.outcome, Outcome::Paused);
+        assert!(paused.state.segments.len() > 4, "duraklatmadan önce bölünmedi");
+
+        let expected = pattern(total);
+        let on_disk = std::fs::read(&paused.state.part_path).unwrap();
+        for s in &paused.state.segments {
+            let (a, b) = (s.start as usize, (s.start + s.downloaded) as usize);
+            assert_eq!(on_disk[a..b], expected[a..b], "parça {}-{} bozuk", s.start, s.end);
+        }
+
+        let resumed = run(&client, &sp, paused.state, CancellationToken::new(), noop()).await;
+        let Outcome::Completed(path) = resumed.outcome else { panic!("{:?}", resumed.outcome) };
+        assert_eq!(std::fs::read(&path).unwrap(), expected);
+        assert_tiled(&resumed.state, total as u64);
     }
 
     #[tokio::test]
@@ -642,7 +820,7 @@ mod tests {
 
         let last: Arc<Mutex<Vec<SegMeta>>> = Arc::default();
         let sink = last.clone();
-        let cb: Arc<dyn Fn(&[u64], &[SegMeta]) + Send + Sync> =
+        let cb: Arc<dyn Fn(&[Segment], &[SegMeta]) + Send + Sync> =
             Arc::new(move |_, m| *sink.lock().unwrap() = m.to_vec());
         let res = run(&client, &sp, state, CancellationToken::new(), cb).await;
         let Outcome::Completed(path) = res.outcome else { panic!("{:?}", res.outcome) };

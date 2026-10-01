@@ -2,6 +2,7 @@ pub mod category;
 pub mod commands;
 pub mod engine;
 pub mod manager;
+pub mod notifications;
 pub mod server;
 pub mod speedtest;
 pub mod verify;
@@ -18,6 +19,26 @@ use manager::{Event, Manager};
 
 /// Windows ile başlatılırken eklenen argüman; bu durumda pencere açılmadan tepside başlanır.
 const AUTOSTART_ARG: &str = "--autostart";
+
+/// Açılışta ana pencere gösterilmeli mi? Yalnızca Windows ile otomatik başlatılmışsa ve kullanıcı
+/// "tepside küçültülmüş başla" demişse gösterilmez; elle açılışta her zaman gösterilir.
+fn show_window_on_launch(launched_by_autostart: bool, start_minimized: bool) -> bool {
+  !(launched_by_autostart && start_minimized)
+}
+
+/// Windows başlangıç kaydı açıksa onu güncel yol ve `--autostart` argümanıyla yeniden yazar.
+/// Argümansız eski kayıtlar pencereyi açık başlatırdı; bu çağrı onları sessizce düzeltir.
+/// Geliştirme derlemesi kaydı kendi (debug) yoluyla ezmesin diye yalnızca yayın sürümünde çalışır.
+fn repair_autostart_entry(app: &AppHandle) {
+  if cfg!(debug_assertions) {
+    return;
+  }
+  use tauri_plugin_autostart::ManagerExt;
+  let launcher = app.autolaunch();
+  if launcher.is_enabled().unwrap_or(false) {
+    let _ = launcher.enable();
+  }
+}
 
 /// Pencereyi monitörün çalışma alanına (görev çubuğu hariç) sığdırıp ortalar.
 fn fit_to_work_area(w: &tauri::WebviewWindow) {
@@ -89,10 +110,6 @@ pub fn run() {
       }
       tray.build(app)?;
 
-      if !std::env::args().any(|a| a == AUTOSTART_ARG) {
-        show_main_window(app.handle());
-      }
-
       if cfg!(debug_assertions) {
         app.handle().plugin(
           tauri_plugin_log::Builder::default()
@@ -118,12 +135,28 @@ pub fn run() {
             handle.emit("download-update", d)
           }
           Event::Remove(id) => handle.emit("download-remove", id),
+          Event::Notify(n) => {
+            // Tehdit bulunduğunda pencere gizliyse (tepside) kaçırılmasın diye Windows bildirimi de gönder.
+            let hidden = handle.get_webview_window("main").is_some_and(|w| !w.is_visible().unwrap_or(false));
+            if n.kind == "scan_threat" && hidden {
+              use tauri_plugin_notification::NotificationExt;
+              let _ = handle.notification().builder().title(n.title.clone()).body(n.body.clone()).show();
+            }
+            handle.emit("notification", n)
+          }
         };
       });
       let manager = Manager::new(data_dir.join("downloads.db"), downloads, emit)?;
       tauri::async_runtime::spawn(server::serve(manager.clone()));
       manager.resume_interrupted();
       manager.start_monitors();
+
+      // Ayar okunduktan sonra karar verilir; pencere yapılandırmada gizli başlar.
+      let by_autostart = std::env::args().any(|a| a == AUTOSTART_ARG);
+      if show_window_on_launch(by_autostart, manager.settings().start_minimized) {
+        show_main_window(app.handle());
+      }
+      repair_autostart_entry(app.handle());
       app.manage(manager);
       app.manage(commands::SpeedTestState::default());
       Ok(())
@@ -147,6 +180,11 @@ pub fn run() {
       commands::video_prepare,
       commands::add_video,
       commands::scan_download,
+      commands::list_notifications,
+      commands::mark_notification_read,
+      commands::mark_all_notifications_read,
+      commands::delete_notification,
+      commands::clear_notifications,
     ])
     .build(tauri::generate_context!())
     .expect("error while building tauri application");
@@ -167,4 +205,34 @@ pub fn run() {
       });
     }
   });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::show_window_on_launch;
+  use crate::manager::Settings;
+
+  #[test]
+  fn autostart_with_start_minimized_stays_in_tray() {
+    assert!(!show_window_on_launch(true, true));
+  }
+
+  #[test]
+  fn autostart_without_start_minimized_shows_window() {
+    assert!(show_window_on_launch(true, false));
+  }
+
+  #[test]
+  fn manual_launch_always_shows_window() {
+    assert!(show_window_on_launch(false, true));
+    assert!(show_window_on_launch(false, false));
+  }
+
+  #[test]
+  fn start_minimized_is_on_by_default_and_for_old_saved_settings() {
+    assert!(Settings::default().start_minimized);
+    // Bu alan eklenmeden önce kaydedilmiş ayarlar da tepside başlamalı.
+    let old: Settings = serde_json::from_str(r#"{"connections":4}"#).unwrap();
+    assert!(old.start_minimized);
+  }
 }

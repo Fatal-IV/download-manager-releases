@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
-import { CheckCircle2, Download as DownloadIcon, ListChecks, Moon, Plus, Settings, Sun } from 'lucide-react'
+import { Bell, CheckCircle2, Download as DownloadIcon, ListChecks, Moon, Plus, Settings, Sun } from 'lucide-react'
 import clsx from 'clsx'
-import { formatSpeed } from '../lib/format'
+import { badgeText, formatSpeed } from '../lib/format'
 import { useStore } from '../store'
 import type { Filter } from '../types'
 
@@ -39,6 +39,9 @@ export function Dock({
   const setFilter = useStore((s) => s.setFilter)
   const theme = useStore((s) => s.theme)
   const toggleTheme = useStore((s) => s.toggleTheme)
+  const unread = useStore((s) => s.notifications.filter((n) => !n.read).length)
+  const panelOpen = useStore((s) => s.panelOpen)
+  const setPanelOpen = useStore((s) => s.setPanelOpen)
 
   const items: Item[] = [
     ...FILTERS.map<Item>((f) => ({
@@ -154,6 +157,24 @@ export function Dock({
             className="grid h-11 w-11 place-items-center rounded-[14px] bg-accent text-white shadow-md transition-transform hover:scale-105 active:scale-95"
           >
             <Plus size={20} />
+          </button>
+          <button
+            onClick={() => setPanelOpen(!panelOpen)}
+            title="Bildirimler"
+            aria-label={unread > 0 ? `Bildirimler, ${unread} okunmamış` : 'Bildirimler'}
+            aria-expanded={panelOpen}
+            data-notification-bell
+            className={clsx(
+              'relative grid h-11 w-11 place-items-center rounded-[14px] text-ink shadow-md transition-transform hover:scale-105 active:scale-95',
+              panelOpen ? 'bg-accent text-white' : 'bg-white/10 hover:bg-white/15',
+            )}
+          >
+            <Bell size={18} />
+            {unread > 0 && (
+              <span className="absolute -right-1 -top-1 grid min-w-[18px] place-items-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-[18px] text-white ring-2 ring-black/30">
+                {badgeText(unread)}
+              </span>
+            )}
           </button>
           <button
             onClick={onSettings}

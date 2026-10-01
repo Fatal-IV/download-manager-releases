@@ -264,6 +264,33 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </section>
 
           <section className="space-y-3">
+            <div className="px-1">
+              <div className="text-sm font-medium">Uygulama içi bildirimler</div>
+              <p className="mt-0.5 text-xs text-mute">
+                Hangi olaylarda toast gösterilip geçmişe kaydedileceğini seç. Tehdit bulundu ve özet
+                uyuşmuyor uyarıları her zaman gösterilir.
+              </p>
+            </div>
+            {(
+              [
+                ['downloadComplete', 'İndirme tamamlandı', 'Bir indirme bittiğinde bildirim gelir.'],
+                ['downloadFailed', 'İndirme hatası', 'Bir indirme başarısız olduğunda bildirim gelir.'],
+                ['hash', 'SHA-256 özeti', 'Özet hesaplandığında bildirim gelir.'],
+                ['verify', 'Özet doğrulama', 'Verdiğin beklenen özet eşleşince bildirim gelir.'],
+                ['scan', 'Virüs taraması', 'Tarama temiz çıktığında ya da yapılamadığında bildirim gelir.'],
+              ] as const
+            ).map(([key, title, hint]) => (
+              <Toggle
+                key={key}
+                checked={settings.notifyKinds[key]}
+                onChange={() => save({ notifyKinds: { ...settings.notifyKinds, [key]: !settings.notifyKinds[key] } })}
+                title={title}
+                hint={hint}
+              />
+            ))}
+          </section>
+
+          <section className="space-y-3">
             <Toggle
               checked={settings.notifyOnComplete}
               onChange={() => save({ notifyOnComplete: !settings.notifyOnComplete })}
@@ -316,7 +343,7 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
           </section>
 
           {autostart !== null && (
-            <section>
+            <section className="space-y-3">
               <button
                 type="button"
                 role="switch"
@@ -345,6 +372,14 @@ export function SettingsDialog({ onClose }: { onClose: () => void }) {
                   />
                 </span>
               </button>
+              <div className={clsx(!autostart && 'pointer-events-none opacity-40')} aria-disabled={!autostart}>
+                <Toggle
+                  checked={settings.startMinimized}
+                  onChange={() => save({ startMinimized: !settings.startMinimized })}
+                  title="Tepside küçültülmüş başlat"
+                  hint="Windows ile açıldığında pencere görünmez, uygulama sistem tepsisinde başlar. Kapalıyken pencere açılır. Yalnızca “Windows ile başlat” açıkken geçerlidir."
+                />
+              </div>
             </section>
           )}
 
