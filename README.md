@@ -29,7 +29,7 @@
 ## ✨ Nedir?
 
 **İndirme Yöneticisi**, büyük dosyaları tek bir bağlantıya mahkûm kalmadan indirmeni sağlayan hafif bir Windows uygulamasıdır.
-Dosyayı parçalara böler, parçaları aynı anda ayrı bağlantılarla indirir ve sonunda birleştirir. Cam efektli arayüzü; hız sınırı, zamanlayıcı ve otomatik güncelleme gibi günlük hayatı kolaylaştıran özelliklerle birlikte gelir.
+Dosyayı parçalara böler, parçaları aynı anda ayrı bağlantılarla indirir ve sonunda birleştirir. Hız sınırı ve zamanlayıcı gibi günlük hayatı kolaylaştıran özelliklerle gelir..
 
 <div align="center">
 <img src="assets/demo.svg" alt="Parçalı indirme ve canlı hız grafiği (temsili animasyon)" width="90%"/>
@@ -60,7 +60,7 @@ Dosyayı parçalara böler, parçaları aynı anda ayrı bağlantılarla indirir
 - **Zamanlayıcı:** İndirmeler yalnızca seçtiğin saat aralığında çalışsın (ör. gece 02:00–08:00)
 - **Aynı anda indirme sınırı** ve otomatik **kuyruk**
 - **Duraklat / sürdür**, kapatıp açsan da kaldığı yerden devam
-- **Canlı hız grafiği** her indirmede
+- **Canlı hız grafiği** her indirmede ne kadar hız aldığına dair temsili grafik
 
 </td>
 </tr>
