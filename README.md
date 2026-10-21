@@ -160,3 +160,9 @@ Evet. Uygulamanın tam kaynak kodu bu depodadır (`src/`, `src-tauri/`, `extensi
 <div align="center">
 <sub>Yapımcı: <a href="https://github.com/Fatal-IV">Fatal-IV</a> · Tauri, Rust ve React ile geliştirildi</sub>
 </div>
+
+---
+
+## Katkıda Bulunan
+
+[**Güneş** (@vertablx)](https://github.com/vertablx) — fikirleri, testleri ve desteğiyle bu projenin parçası.

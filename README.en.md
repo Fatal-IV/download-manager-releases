@@ -74,3 +74,9 @@ scripts/        Release script
 ## License
 
 Source-available, all rights reserved. The code is public so it can be reviewed and built for personal use, but it may not be redistributed, modified for distribution or used commercially without permission. See [LICENSE](LICENSE).
+
+---
+
+## Contributor
+
+[**Güneş** (@vertablx)](https://github.com/vertablx) — contributes ideas, testing and support to this project.
